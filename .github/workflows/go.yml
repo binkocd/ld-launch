@@ -23,11 +23,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        go install github.com/charmbracelet/bubbletea@latest \
-        go install github.com/charmbracelet/bubbles/list@latest \
-        go install github.com/charmbracelet/lipgloss@latest \
-        go install github.com/charmbracelet/bubbles/textinput@latest \
-        go install gopkg.in/yaml.v3@latest
+        go install .
 
     - name: Build
       run: go build -v -o ld-launch
