@@ -20,7 +20,7 @@ import (
 )
 
 // -----------------------------------------------------------------------
-// 1. STYLES & CONFIG
+// 1. STYLES & MODELS
 // -----------------------------------------------------------------------
 
 var (
@@ -28,7 +28,6 @@ var (
 	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
 	labelStyle   = lipgloss.NewStyle().Width(14).Bold(true)
 	confirmStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true).MarginTop(1)
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // For timestamps
 )
 
 type sessionState int
@@ -43,7 +42,7 @@ type Host struct {
 	Name          string `yaml:"name"`
 	Desc          string `yaml:"desc"`
 	Endpoint      string `yaml:"endpoint"`
-	LastConnected string `yaml:"last_connected"` // New field for YAML
+	LastConnected string `yaml:"last_connected"`
 	IsSystem      bool   `yaml:"-"`
 }
 
@@ -52,15 +51,12 @@ type Config struct {
 }
 
 type item struct {
-	title, desc, endpoint string
-	status                string
-	lastConnected         string // New field for the TUI display
-	isSystem              bool
+	title, desc, endpoint, lastConnected, status string
+	isSystem                                     bool
 }
 
 func (i item) Title() string { return i.title }
 func (i item) Description() string {
-	// Showing Status + Last Connected in the description
 	last := i.lastConnected
 	if last == "" {
 		last = "Never"
@@ -76,13 +72,8 @@ type statusMsg struct {
 	status string
 }
 
-// -----------------------------------------------------------------------
-// 2. KEYBINDINGS
-// -----------------------------------------------------------------------
-
 type listKeyMap struct {
-	add    key.Binding
-	delete key.Binding
+	add, delete key.Binding
 }
 
 func newListKeyMap() listKeyMap {
@@ -91,10 +82,6 @@ func newListKeyMap() listKeyMap {
 		delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	}
 }
-
-// -----------------------------------------------------------------------
-// 3. THE MODEL
-// -----------------------------------------------------------------------
 
 type model struct {
 	state      sessionState
@@ -105,6 +92,10 @@ type model struct {
 	choice     string
 }
 
+// -----------------------------------------------------------------------
+// 2. TUI INITIALIZATION
+// -----------------------------------------------------------------------
+
 func initialModel(hosts []Host) model {
 	var items []list.Item
 	for _, h := range hosts {
@@ -113,34 +104,27 @@ func initialModel(hosts []Host) model {
 			prefix = "(sys) "
 		}
 		items = append(items, item{
-			title:         prefix + h.Name,
-			desc:          h.Desc,
-			endpoint:      h.Endpoint,
-			lastConnected: h.LastConnected,
-			status:        "Checking...",
-			isSystem:      h.IsSystem,
+			title: prefix + h.Name, desc: h.Desc, endpoint: h.Endpoint,
+			lastConnected: h.LastConnected, status: "Checking...", isSystem: h.IsSystem,
 		})
 	}
 
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Docker Host Manager"
-	customKeys := newListKeyMap()
-	l.AdditionalFullHelpKeys = func() []key.Binding { return []key.Binding{customKeys.add, customKeys.delete} }
 
-	inputs := make([]textinput.Model, 3)
-	inputs[0] = textinput.New()
-	inputs[0].Placeholder = "Home Server"
-	inputs[1] = textinput.New()
-	inputs[1].Placeholder = "Raspberry Pi Cluster"
-	inputs[2] = textinput.New()
-	inputs[2].Placeholder = "ssh://user@192.168.1.50"
+	keys := newListKeyMap()
+	l.AdditionalFullHelpKeys = func() []key.Binding { return []key.Binding{keys.add, keys.delete} }
 
-	return model{state: stateList, list: l, keys: customKeys, inputs: inputs}
+	ins := make([]textinput.Model, 3)
+	ins[0] = textinput.New()
+	ins[0].Placeholder = "Name"
+	ins[1] = textinput.New()
+	ins[1].Placeholder = "Description"
+	ins[2] = textinput.New()
+	ins[2].Placeholder = "ssh://user@ip"
+
+	return model{state: stateList, list: l, keys: keys, inputs: ins}
 }
-
-// -----------------------------------------------------------------------
-// 4. UPDATE (LOGIC)
-// -----------------------------------------------------------------------
 
 func (m model) Init() tea.Cmd {
 	var cmds []tea.Cmd
@@ -150,6 +134,10 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// -----------------------------------------------------------------------
+// 3. UPDATE LOGIC
+// -----------------------------------------------------------------------
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.WindowSizeMsg); ok {
 		h, v := docStyle.GetFrameSize()
@@ -158,15 +146,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch m.state {
 	case stateConfirmDelete:
-		return updateConfirmDelete(msg, m)
+		return m.updateConfirmDelete(msg)
 	case stateForm:
-		return updateForm(msg, m)
+		return m.updateForm(msg)
 	default:
-		return updateList(msg, m)
+		return m.updateList(msg)
 	}
 }
 
-func updateList(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+func (m model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case statusMsg:
 		items := m.list.Items()
@@ -183,26 +171,26 @@ func updateList(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "a":
 			m.state = stateForm
-			m.focusIndex = 0
 			return m, m.inputs[0].Focus()
 		case "d":
-			m.state = stateConfirmDelete
+			if i, ok := m.list.SelectedItem().(item); ok {
+				if !i.isSystem {
+					m.state = stateConfirmDelete
+				}
+			}
 			return m, nil
+		case "q", "ctrl+c":
+			m.choice = ""
+			return m, tea.Quit
 		case "enter":
-			i, ok := m.list.SelectedItem().(item)
-			if ok {
+			if i, ok := m.list.SelectedItem().(item); ok {
 				m.choice = i.endpoint
-
-				// UPDATE TIMESTAMP LOGIC
 				idx := m.list.Index()
 				items := m.list.Items()
 				selected := items[idx].(item)
-				// Format: Jan 06 14:38
 				selected.lastConnected = time.Now().Format("Jan 02 15:04")
 				items[idx] = selected
 				m.list.SetItems(items)
-
-				// Save the timestamp to YAML before closing
 				m.saveCurrentListToYAML()
 				return m, tea.Quit
 			}
@@ -213,21 +201,21 @@ func updateList(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func updateConfirmDelete(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+func (m model) updateConfirmDelete(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyMsg); ok {
-		switch msg.String() {
-		case "y", "Y":
+		switch strings.ToLower(msg.String()) {
+		case "y":
 			m.list.RemoveItem(m.list.Index())
 			m.saveCurrentListToYAML()
 			m.state = stateList
-		case "n", "N", "esc":
+		case "n", "esc":
 			m.state = stateList
 		}
 	}
 	return m, nil
 }
 
-func updateForm(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+func (m model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -236,20 +224,19 @@ func updateForm(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "tab", "enter":
 			if msg.String() == "enter" && m.focusIndex == 2 {
-				newIndex := len(m.list.Items())
-				m.list.InsertItem(newIndex, item{
-					title:    m.inputs[0].Value(),
-					desc:     m.inputs[1].Value(),
-					endpoint: m.inputs[2].Value(),
-					status:   "Checking...",
+				newIdx := len(m.list.Items())
+				endpoint := m.inputs[2].Value()
+				m.list.InsertItem(newIdx, item{
+					title: m.inputs[0].Value(), desc: m.inputs[1].Value(), endpoint: endpoint, status: "Checking...",
 				})
 				m.saveCurrentListToYAML()
 				for i := range m.inputs {
 					m.inputs[i].SetValue("")
+					m.inputs[i].Blur()
 				}
+				m.focusIndex = 0
 				m.state = stateList
-				// Trigger the status check for the new item immediately
-				return m, checkStatus(newIndex, m.inputs[2].Value())
+				return m, checkStatus(newIdx, endpoint)
 			}
 			m.inputs[m.focusIndex].Blur()
 			m.focusIndex = (m.focusIndex + 1) % 3
@@ -266,46 +253,25 @@ func updateForm(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 }
 
 // -----------------------------------------------------------------------
-// 5. VIEW (RENDERING)
+// 4. VIEW & HELPERS
 // -----------------------------------------------------------------------
 
 func (m model) View() string {
 	switch m.state {
 	case stateConfirmDelete:
 		selected := m.list.SelectedItem().(item)
-		return docStyle.Render(fmt.Sprintf(
-			"Delete host %s?\n\n%s",
-			titleStyle.Render(selected.title),
-			confirmStyle.Render("[y] Confirm / [n] Cancel"),
-		))
+		return docStyle.Render(fmt.Sprintf("Delete %s?\n\n%s", titleStyle.Render(selected.title), confirmStyle.Render("[y] Confirm / [n] Cancel")))
 	case stateForm:
 		var s strings.Builder
-		s.WriteString(titleStyle.Render("ADD NEW DOCKER HOST") + "\n\n")
+		s.WriteString(titleStyle.Render("ADD NEW HOST") + "\n\n")
 		labels := []string{"Host Name:", "Description:", "Endpoint:"}
 		for i := range m.inputs {
 			s.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render(labels[i]), m.inputs[i].View()))
 		}
-		s.WriteString("\n(tab to cycle • enter to save • esc to cancel)")
-		return docStyle.Render(s.String())
+		return docStyle.Render(s.String() + "\n(tab/enter to cycle • esc to cancel)")
 	default:
 		return docStyle.Render(m.list.View())
 	}
-}
-
-// -----------------------------------------------------------------------
-// 6. BACKEND (SAVE/LOAD/EXEC)
-// -----------------------------------------------------------------------
-
-func loadConfig() (Config, error) {
-	configDir, _ := os.UserConfigDir()
-	path := filepath.Join(configDir, "ld-launch", "config.yml")
-	data, err := os.ReadFile(path)
-	var cfg Config
-	if err != nil {
-		return cfg, err
-	}
-	yaml.Unmarshal(data, &cfg)
-	return cfg, nil
 }
 
 func (m model) saveCurrentListToYAML() {
@@ -313,38 +279,12 @@ func (m model) saveCurrentListToYAML() {
 	for _, itm := range m.list.Items() {
 		h := itm.(item)
 		if !h.isSystem {
-			custom = append(custom, Host{
-				Name:          h.title,
-				Desc:          h.desc,
-				Endpoint:      h.endpoint,
-				LastConnected: h.lastConnected, // Save the timestamp!
-			})
+			custom = append(custom, Host{Name: h.title, Desc: h.desc, Endpoint: h.endpoint, LastConnected: h.lastConnected})
 		}
 	}
 	data, _ := yaml.Marshal(Config{Hosts: custom})
 	configDir, _ := os.UserConfigDir()
-	path := filepath.Join(configDir, "ld-launch", "config.yml")
-	_ = os.WriteFile(path, data, 0644)
-}
-
-func getSystemContexts() []Host {
-	cmd := exec.Command("docker", "context", "ls", "--format", "{{json .}}")
-	out, _ := cmd.Output()
-	var hosts []Host
-	for _, line := range strings.Split(string(out), "\n") {
-		if line == "" {
-			continue
-		}
-		var raw map[string]interface{}
-		json.Unmarshal([]byte(line), &raw)
-		hosts = append(hosts, Host{
-			Name:     fmt.Sprintf("%v", raw["Name"]),
-			Desc:     fmt.Sprintf("%v", raw["Description"]),
-			Endpoint: fmt.Sprintf("%v", raw["DockerEndpoint"]),
-			IsSystem: true,
-		})
-	}
-	return hosts
+	_ = os.WriteFile(filepath.Join(configDir, "ld-launch", "config.yml"), data, 0644)
 }
 
 func checkStatus(index int, endpoint string) tea.Cmd {
@@ -373,20 +313,55 @@ func checkStatus(index int, endpoint string) tea.Cmd {
 	}
 }
 
-func runLazyDocker(endpoint string) {
-	c := exec.Command("lazydocker")
-	c.Env = append(os.Environ(), "DOCKER_HOST="+endpoint)
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-	_ = c.Run()
+func getSystemContexts() []Host {
+	cmd := exec.Command("docker", "context", "ls", "--format", "{{json .}}")
+	out, _ := cmd.Output()
+	var hosts []Host
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+		var raw map[string]interface{}
+		json.Unmarshal([]byte(line), &raw)
+		hosts = append(hosts, Host{
+			Name: fmt.Sprintf("%v", raw["Name"]), Desc: fmt.Sprintf("%v", raw["Description"]),
+			Endpoint: fmt.Sprintf("%v", raw["DockerEndpoint"]), IsSystem: true,
+		})
+	}
+	return hosts
 }
 
 func main() {
 	configDir, _ := os.UserConfigDir()
 	_ = os.MkdirAll(filepath.Join(configDir, "ld-launch"), os.ModePerm)
-	cfg, _ := loadConfig()
-	all := append(getSystemContexts(), cfg.Hosts...)
-	p := tea.NewProgram(initialModel(all), tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		os.Exit(1)
+
+	for {
+		path := filepath.Join(configDir, "ld-launch", "config.yml")
+		var cfg Config
+		if data, err := os.ReadFile(path); err == nil {
+			yaml.Unmarshal(data, &cfg)
+		}
+
+		all := append(getSystemContexts(), cfg.Hosts...)
+		p := tea.NewProgram(initialModel(all), tea.WithAltScreen())
+
+		finalModel, err := p.Run()
+		if err != nil {
+			fmt.Printf("Error: %v", err)
+			os.Exit(1)
+		}
+
+		m := finalModel.(model)
+		// If choice is empty, it means the user pressed Q or Ctrl+C
+		if m.choice == "" {
+			break
+		}
+
+		c := exec.Command("lazydocker")
+		c.Env = append(os.Environ(), "DOCKER_HOST="+m.choice)
+		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+		_ = c.Run()
+		
+		// After lazydocker exits, the loop restarts back to the menu
 	}
 }
