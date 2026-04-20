@@ -7,11 +7,8 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Required to create releases
-    
     strategy:
       matrix:
         include:
@@ -23,8 +20,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0 # Necessary to pull history for deltas/contributors
 
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -50,21 +45,33 @@ jobs:
       run: |
         BINARY_NAME=ld-launch-${{ matrix.os }}-${{ matrix.arch }}
         go build -v -o $BINARY_NAME .
-        echo "BINARY_PATH=$BINARY_NAME" >> $GITHUB_ENV
+        
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ld-launch-${{ matrix.os }}-${{ matrix.arch }}
+        path: ld-launch-${{ matrix.os }}-${{ matrix.arch }}
 
-    - name: Generate Release Tag
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      id: tag
-      run: echo "tag_name=0.1.${{ github.run_number }}" >> $GITHUB_OUTPUT
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+        pattern: ld-launch-*
+        merge-multiple: true
 
     - name: Create Release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ steps.tag.outputs.tag_name }}
-        name: Release ${{ steps.tag.outputs.tag_name }}
-        generate_release_notes: true # This automatically creates the deltas and contributors list
-        files: |
-          ld-launch-linux-amd64
-          ld-launch-dar
-          win-arm64
+        tag_name: 0.1.${{ github.run_number }}
+        name: Release 0.1.${{ github.run_number }}
+        generate_release_notes: true
+        files: ./artifacts/ld
+        -launch-*
