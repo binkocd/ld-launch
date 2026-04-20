@@ -73,5 +73,4 @@ jobs:
         tag_name: 0.1.${{ github.run_number }}
         name: Release 0.1.${{ github.run_number }}
         generate_release_notes: true
-        files: ./artifacts/ld
-        -launch-*
+        files: ./artifacts/ld-launch-*
