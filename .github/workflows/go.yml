@@ -1,4 +1,4 @@
-name: Go Build and Test
+name: Go Build, Test, and Release
 
 on:
   push:
@@ -7,12 +7,24 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to create releases
+    
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: darwin
+            arch: arm64
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Necessary to pull history for deltas/contributors
 
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -23,8 +35,36 @@ jobs:
     - name: Install dependencies
       run: go mod download
 
-    - name: Build ld-launch
-      run: go build -v -o ld-launch .
+    - name: Standard Linting
+      run: |
+        go fmt ./...
+        go vet ./...
 
     - name: Run Tests
       run: go test -v ./...
+
+    - name: Build Binary
+      env:
+        GOOS: ${{ matrix.os }}
+        GOARCH: ${{ matrix.arch }}
+      run: |
+        BINARY_NAME=ld-launch-${{ matrix.os }}-${{ matrix.arch }}
+        go build -v -o $BINARY_NAME .
+        echo "BINARY_PATH=$BINARY_NAME" >> $GITHUB_ENV
+
+    - name: Generate Release Tag
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      id: tag
+      run: echo "tag_name=0.1.${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.tag.outputs.tag_name }}
+        name: Release ${{ steps.tag.outputs.tag_name }}
+        generate_release_notes: true # This automatically creates the deltas and contributors list
+        files: |
+          ld-launch-linux-amd64
+          ld-launch-dar
+          win-arm64
