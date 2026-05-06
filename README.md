@@ -16,11 +16,11 @@ cd ld-launch
 go mod init ld-launch
 ```
 ```bash
-go get github.com/charmbracelet/bubbletea \
-       github.com/charmbracelet/bubbles/list \
-       github.com/charmbracelet/lipgloss \
-       github.com/charmbracelet/bubbles/textinput \
-       gopkg.in/yaml.v3
+go get github.com/charmbracelet/bubbletea@latest \
+       github.com/charmbracelet/bubbles/list@latest \
+       github.com/charmbracelet/lipgloss@latest \
+       github.com/charmbracelet/bubbles/textinput@latest \
+       gopkg.in/yaml.v3@latest
 ```
 ```bash
 go build -o ld-launch -buildvcs=false
